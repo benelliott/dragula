@@ -619,12 +619,12 @@ function getScrollContainer(node) {
   if (node === null) { return null; }
   // NOTE: Manually calculating height because IE's `clientHeight` isn't always
   // reliable.
-  // var nodeOuterHeight = parseFloat(window.getComputedStyle(node).getPropertyValue('height')) +
-  //   parseFloat(window.getComputedStyle(node).getPropertyValue('padding-top')) +
-  //   parseFloat(window.getComputedStyle(node).getPropertyValue('padding-bottom'));
+  var nodeOuterHeight = parseFloat(window.getComputedStyle(node).getPropertyValue('height')) +
+    parseFloat(window.getComputedStyle(node).getPropertyValue('padding-top')) +
+    parseFloat(window.getComputedStyle(node).getPropertyValue('padding-bottom'));
 
   // We determine an element to be scrollable if its scroll height is larger than its computed height:
-  if (node.scrollHeight > Math.ceil(node.clientHeight)) { return node; }
+  if (node.scrollHeight > Math.ceil(nodeOuterHeight)) { return node; }
 
   var REGEX_BODY_HTML = new RegExp('(body|html)', 'i');
 
