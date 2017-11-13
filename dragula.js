@@ -5,6 +5,10 @@ var crossvent = require('crossvent');
 var classes = require('./classes');
 var doc = document;
 var documentElement = doc.documentElement;
+var _autoScrollingInterval; // reference to auto scrolling
+// A simple requestAnimationFrame polyfill
+var raf = window.requestAnimationFrame || function(callback){ return setTimeout(callback, 1000 / 60); };
+var caf = window.cancelAnimationFrame || function(cafID){ clearTimeout(cafID); };
 
 function dragula (initialContainers, options) {
   var len = arguments.length;
@@ -39,6 +43,7 @@ function dragula (initialContainers, options) {
   if (o.direction === void 0) { o.direction = 'vertical'; }
   if (o.ignoreInputTextSelection === void 0) { o.ignoreInputTextSelection = true; }
   if (o.mirrorContainer === void 0) { o.mirrorContainer = doc.body; }
+  if (o.scrollEdge === void 0) { o.scrollEdge = 36; }
 
   var drake = emitter({
     containers: o.containers,
@@ -214,6 +219,7 @@ function dragula (initialContainers, options) {
 
   function end () {
     if (!drake.dragging) {
+      caf(_autoScrollingInterval);
       return;
     }
     var item = _copy || _item;
@@ -299,6 +305,7 @@ function dragula (initialContainers, options) {
 
   function cleanup () {
     var item = _copy || _item;
+    caf(_autoScrollingInterval);
     ungrab();
     removeMirrorImage();
     if (item) {
@@ -351,9 +358,12 @@ function dragula (initialContainers, options) {
   }
 
   function drag (e) {
-    if (!_mirror) {
-      return;
-    }
+    if (!_mirror) { return; }
+    // For iframe. When dragging an item and mouse moves out of the iframe and
+    // mouseup, then decides to move back, the event will be 0 so we should
+    // just call cancel.
+    if (whichMouseButton(e) === 0) { cancel(); }
+
     e.preventDefault();
 
     var clientX = getCoord('clientX', e);
@@ -361,6 +371,7 @@ function dragula (initialContainers, options) {
     var x = clientX - _offsetX;
     var y = clientY - _offsetY;
 
+    // _mirror.style can be null if it is off the page:
     _mirror.style.left = x + 'px';
     _mirror.style.top = y + 'px';
 
@@ -391,6 +402,7 @@ function dragula (initialContainers, options) {
       if (_copy && parent) {
         parent.removeChild(item);
       }
+      startScroll(_item, e, o);
       return;
     }
     if (
@@ -405,6 +417,8 @@ function dragula (initialContainers, options) {
     function moved (type) { drake.emit(type, item, _lastDropTarget, _source); }
     function over () { if (changed) { moved('over'); } }
     function out () { if (_lastDropTarget) { moved('out'); } }
+
+    startScroll(_item, e, o);
   }
 
   function spillOver (el) {
@@ -599,6 +613,93 @@ function getCoord (coord, e) {
     coord = missMap[coord];
   }
   return host[coord];
+}
+
+function getScrollContainer(node) {
+  if (node === null) { return null; }
+  // NOTE: Manually calculating height because IE's `clientHeight` isn't always
+  // reliable.
+  // var nodeOuterHeight = parseFloat(window.getComputedStyle(node).getPropertyValue('height')) +
+  //   parseFloat(window.getComputedStyle(node).getPropertyValue('padding-top')) +
+  //   parseFloat(window.getComputedStyle(node).getPropertyValue('padding-bottom'));
+
+  // We determine an element to be scrollable if its scroll height is larger than its computed height:
+  if (node.scrollHeight > Math.ceil(node.clientHeight)) { return node; }
+
+  var REGEX_BODY_HTML = new RegExp('(body|html)', 'i');
+
+  if (!REGEX_BODY_HTML.test(node.parentNode.tagName)) { return getScrollContainer(node.parentNode); }
+
+  return null;
+}
+
+function startAutoScrolling(node, amount, direction) {
+  _autoScrollingInterval = raf(function() {
+    startAutoScrolling(node, amount, direction);
+  });
+
+  return node[direction] += (amount * 0.25);
+}
+
+function startScroll(item, event, options) {
+  var scrollingElement = null;
+  var scrollEdge = options.scrollEdge;
+  var scrollSpeed = 20;
+  var scrollContainer = getScrollContainer(item);
+  var pageX = null;
+  var pageY = null;
+
+  if (event.touches) {
+    pageX = event.touches[0].pageX;
+    pageY = event.touches[0].pageY;
+  } else {
+    pageX = event.pageX;
+    pageY = event.pageY;
+  }
+
+  caf(_autoScrollingInterval);
+
+
+  // If a container contains the list that is scrollable
+  if (scrollContainer) {
+    // Scrolling vertically
+    if (pageY - getOffset(scrollContainer).top < scrollEdge) {
+      // If difference between y-coord of top of scroll container (getOffset(scrollContainer).top) and y-coord of mouse
+      // event is less than threshold, then start scrolling up:
+      startAutoScrolling(scrollContainer, -scrollSpeed, 'scrollTop');
+    } else if ((getOffset(scrollContainer).top + scrollContainer.getBoundingClientRect().height) - pageY < scrollEdge) {
+      // If difference between y-coord of bottom of scroll container (bottom = start of element + element height) and
+      // y-coord of mouse event is less than threshold, then start scrolling down:
+      startAutoScrolling(scrollContainer, scrollSpeed, 'scrollTop');
+    }
+
+    // Scrolling horizontally
+    if (pageX - scrollContainer.getBoundingClientRect().left < scrollEdge) {
+      startAutoScrolling(scrollContainer, -scrollSpeed, 'scrollLeft');
+    } else if ((getOffset(scrollContainer).left + scrollContainer.getBoundingClientRect().width) - pageX < scrollEdge) {
+      startAutoScrolling(scrollContainer, scrollSpeed, 'scrollLeft');
+    }
+
+  // If the window contains the list
+  } else {
+    scrollingElement = document.scrollingElement || document.documentElement || document.body;
+
+    // Scrolling vertically
+    // NOTE: Using `window.pageYOffset` here because IE doesn't have `window.scrollY`.
+    if ((pageY - window.pageYOffset) < scrollEdge) {
+      startAutoScrolling(scrollingElement, -scrollSpeed, 'scrollTop');
+    } else if ((window.innerHeight - (pageY - window.pageYOffset)) < scrollEdge) {
+      startAutoScrolling(scrollingElement, scrollSpeed, 'scrollTop');
+    }
+
+    // Scrolling horizontally
+    // NOTE: Using `window.pageXOffset` here because IE doesn't have `window.scrollX`.
+    if ((pageX - window.pageXOffset) < scrollEdge) {
+      startAutoScrolling(scrollingElement, -scrollSpeed, 'scrollLeft');
+    } else if ((window.innerWidth - (pageX - window.pageXOffset)) < scrollEdge) {
+      startAutoScrolling(scrollingElement, scrollSpeed, 'scrollLeft');
+    }
+  }
 }
 
 module.exports = dragula;
